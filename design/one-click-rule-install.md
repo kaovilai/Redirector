@@ -8,8 +8,9 @@ because the payload lived in a fragment that any page could construct.
 
 Scope: **this repo (the extension) only.** The community marketplace lives in a
 separate repository — see [marketplace-repo.md](./marketplace-repo.md). The
-extension's job is intentionally small: detect the one official marketplace
-site, accept an install request that names a published entry by **slug**, fetch
+extension's job is intentionally small: detect a trusted marketplace site (in
+release builds: the one official site), accept an install request that names a
+published entry by **slug**, fetch
 the canonical reviewed artifact from that site, validate it, and store it. The
 extension never becomes a marketplace, never renders marketplace content, and
 never installs anything a web page hands it directly.
@@ -27,18 +28,21 @@ installs; the page reflects the outcome.
 ## Goals
 
 - One-click install of a published marketplace entry from its detail page on
-  the **official marketplace origin only**.
+  a **trusted marketplace origin** — in release builds, the official origin
+  only.
 - The install source is authenticated and the installed data is non-forgeable:
-  the extension only ever installs what is actually published at the canonical
-  origin, never what a page supplied.
+  the extension only ever installs what is actually published at the trusted
+  origin the request came from, never what a page supplied.
 - Takedowns take effect immediately for new installs.
 - Works on Chrome, Edge, Firefox, and Safari.
 
 ## Non-Goals
 
 - Installing from arbitrary or user-added origins. There is exactly one
-  marketplace origin, hardcoded, on a domain/repo controlled by the extension
-  maintainer.
+  marketplace origin in release builds, on a domain/repo controlled by the
+  extension maintainer. In code it is a **compile-time array of trusted
+  origins** so forks and development builds can append their own testing
+  origin (see Install Mechanism below) — but it is never runtime-extensible.
 - An in-extension install/confirmation page, router, or marketplace UI.
 - Payload-carrying deep links (`…/install#rule=<base64>`), origin allow-lists,
   or user-editable trusted-origin settings — all dropped from Rev 1.
@@ -49,12 +53,33 @@ installs; the page reflects the outcome.
 
 ## Install Mechanism
 
-### 1. Content script on the official origin
+### 1. Content script on trusted origins
 
-A content script is registered for the single official marketplace origin
-(e.g. `https://<owner>.github.io/redirector-marketplace/*`). Because content
-scripts only exist in documents genuinely served from that origin, their
-presence *is* the source authentication — no allow-list logic needed.
+A content script is registered for the trusted marketplace origins (in release
+builds: the single official origin, e.g.
+`https://<owner>.github.io/redirector-marketplace/*`). Because content scripts
+only exist in documents genuinely served from those origins, their presence
+*is* the source authentication — no allow-list logic needed.
+
+The trusted deployments live in one source-level constant that everything
+else derives from — each entry is a base URL (origin plus optional path
+prefix, since GitHub Pages project sites serve under a path):
+
+```ts
+// src/lib/marketplace-origins.ts
+export const TRUSTED_ORIGINS: readonly string[] = [
+  'https://<owner>.github.io/redirector-marketplace',
+  // Forks/dev builds append their testing deployment here, e.g.:
+  // 'https://<fork-owner>.github.io/redirector-marketplace',
+]
+```
+
+The manifest's `content_scripts` matches (`<base>/*`) and the background's
+sender/fetch checks are all generated from this array. Upstream release
+builds ship it with exactly the official deployment; a fork testing
+marketplace changes appends its own Pages base URL and builds — a code change
+and rebuild, deliberately **not** a runtime setting, so the installed
+population's trust surface stays exactly one maintainer-controlled origin.
 
 On load it marks the page as "extension installed" so the site can render its
 Install buttons only when installing is actually possible (otherwise the site
@@ -90,9 +115,14 @@ The content script relays `{ type: 'install', slug }` to the background via
 
 1. Validates the slug shape (`^[a-z0-9][a-z0-9-]{0,63}$`) — this is a URL path
    segment, so reject anything else before building the URL (no traversal).
-2. Fetches `https://<official-origin>/rules/<slug>.json` with
-   `cache: 'no-cache'` (so takedowns and updates are seen promptly). The
-   existing `<all_urls>` host permission already covers this fetch.
+2. Resolves the sender against `TRUSTED_ORIGINS`: `sender.origin` must equal
+   the origin of an entry (defense in depth — only trusted-origin content
+   scripts exist anyway), and that entry becomes the fetch base. Fetches
+   `<base>/rules/<slug>.json` with `cache: 'no-cache'` (so takedowns and
+   updates are seen promptly). The fetch base comes from the compile-time
+   entry matched by the validated sender origin, never from message data, so
+   each marketplace instance can only ever install what it itself publishes.
+   The existing `<all_urls>` host permission already covers this fetch.
 3. Validates the document (see Validation below). A 404 means the entry was
    taken down or never existed: takedown is immediately effective for installs.
 4. Appends the entry's rules to storage via the existing
@@ -122,8 +152,8 @@ type MarketplaceResponse =
 ```
 
 `query-installed` lets the page render already-installed state for the slugs
-it displays. It answers only for the specific slugs asked about, and only on
-the official origin.
+it displays. It answers only for the specific slugs asked about, and only for
+senders on a trusted origin.
 
 Note the deliberate inversion of Rev 1's "no remote fetch" principle: that
 principle's actual goal was "a page can't swap the payload after review".
@@ -219,11 +249,15 @@ bytes, so the whole budget is roughly 25–40 rules. Therefore:
 ## Security Analysis
 
 - **Source authentication:** the content script only exists in documents
-  really served from the official origin; there is no origin comparison logic
-  to get wrong and no user-configurable trust surface.
+  really served from a `TRUSTED_ORIGINS` origin — a compile-time constant, so
+  there is no runtime origin configuration to get wrong and no
+  user-configurable trust surface. Release builds contain exactly the
+  official origin; widening it means shipping a different build (which is the
+  point — forks own their own trust decisions).
 - **Non-forgeable payloads:** the extension installs only what it fetched from
-  the canonical origin. `meta`/provenance can no longer be forged by a link
-  constructor (Rev 1's flaw).
+  the sender's validated trusted origin. `meta`/provenance can no longer be
+  forged by a link constructor (Rev 1's flaw), and one trusted origin cannot
+  serve installs for another.
 - **Genuine gesture:** `event.isTrusted` gating means installs require a real
   user click on the official page.
 - **Immediate takedown:** removing `rules/<slug>.json` 404s all new installs.
@@ -238,25 +272,29 @@ bytes, so the whole budget is roughly 25–40 rules. Therefore:
 
 ## Implementation Sketch
 
-1. `src/entrypoints/marketplace.content.ts` — WXT content script for the
-   official origin: readiness marker, delegated `isTrusted` click handler for
+1. `src/lib/marketplace-origins.ts` — the `TRUSTED_ORIGINS` constant (official
+   origin only in upstream; forks append their testing origin).
+2. `src/entrypoints/marketplace.content.ts` — WXT content script matching the
+   trusted origins: readiness marker, delegated `isTrusted` click handler for
    `[data-redirector-install]`, message relay, button-state updates.
-2. `src/lib/install.ts` — pure, unit-testable functions: slug validation,
+3. `src/lib/install.ts` — pure, unit-testable functions: slug validation,
    entry-document schema validation, duplicate detection, slug-keyed
    merge/replace of the rules array (vitest, like `check.ts`).
-3. `src/entrypoints/background.ts` — `runtime.onMessage` handler for the two
-   request types: fetch canonical JSON, call `install.ts` logic, write via the
-   existing storage path, reply with the outcome.
-4. `src/entrypoints/options/` — rules list renders a small source badge for
+4. `src/entrypoints/background.ts` — `runtime.onMessage` handler for the two
+   request types: check sender origin, fetch canonical JSON from it, call
+   `install.ts` logic, write via the existing storage path, reply with the
+   outcome.
+5. `src/entrypoints/options/` — rules list renders a small source badge for
    rules with `source.slug` (linking to the detail page) and a
    "remove all rules from this entry" action. No new route.
-5. **Manifest:** one addition — a `content_scripts` entry for the marketplace
-   origin (Rev 1's "no manifest changes required" no longer holds). No new
-   permissions: `storage` and `<all_urls>` host access already exist.
-6. Tests — unit tests for `install.ts`; a store-level test that installing
+6. **Manifest:** one addition — a `content_scripts` entry generated from
+   `TRUSTED_ORIGINS` (Rev 1's "no manifest changes required" no longer
+   holds). No new permissions: `storage` and `<all_urls>` host access already
+   exist.
+7. Tests — unit tests for `install.ts`; a store-level test that installing
    appends slug-tagged normalized rules and reinstalling replaces them; a
-   message-contract test for the background handler (including 404 and
-   quota-exceeded outcomes).
+   message-contract test for the background handler (including 404,
+   quota-exceeded, and untrusted-sender outcomes).
 
 ## Browser Notes
 

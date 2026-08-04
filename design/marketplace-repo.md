@@ -8,9 +8,13 @@ extension-side design in [one-click-rule-install.md](./one-click-rule-install.md
 has a concrete counterpart.
 
 The marketplace site is hosted on a **single official origin under the
-extension maintainer's control** — the origin ships hardcoded in the extension
-to all users, so it cannot live under an arbitrary account. Hosting details are
-settled when this moves forward.
+extension maintainer's control** — release builds of the extension trust
+exactly that origin, so it cannot live under an arbitrary account. (In the
+extension source the trusted origin is a compile-time *array* so forks and
+development builds can append a testing origin — e.g. a fork of this repo
+publishing to its own Pages origin to test marketplace fixes — but upstream
+ships only the official one; see the extension doc's Install Mechanism.)
+Hosting details are settled when this moves forward.
 
 ## Purpose
 
@@ -98,35 +102,116 @@ The unit of sharing is the **catalog entry**, not a payload:
 
 Submitters never touch JSON, git, or the site generator.
 
+## Contribution Flow — example-based suggestions (`suggest-rule.yml`)
+
+Writing a working match pattern is the hardest part of submitting, so a third
+form serves users who can only describe what they want **by example**:
+
+1. **Suggest a rule** on the site links to
+   `…/issues/new?template=suggest-rule.yml`.
+2. The form collects: **Entry name**, **Your name / display name**,
+   **Description**, and 1..N **example URL pairs** — "when I'm on `<URL>`,
+   take me to `<URL>`" — plus the same acknowledgement checkboxes as
+   `submit-rule.yml`. No regex, no mode, no field syntax.
+3. A gh-aw **rule-generation workflow** (`generate-rule.md`, same framework
+   and guardrails as Layer 3: pinned prompt and tools, no push/merge/edit
+   permissions, `safe-outputs` only, form text treated as untrusted data)
+   derives `from`/`to`/`exclude`/`mode` from the example pairs, generalizing
+   conservatively — match only the demonstrated URL shape rather than broad
+   patterns. If it cannot produce fields whose computed redirects reproduce
+   every example pair, it labels the issue `needs-human-fix` with an
+   explanation instead of opening a PR.
+4. The example pairs become the entry's **test URLs** (first pair →
+   `testUrl`, the rest → `meta.additionalTestUrls`), so the generated PR
+   always includes test URLs, and CI's issue comment shows each example
+   source URL's *resolved* redirect next to the redirect the suggester asked
+   for — lookable proof the rule does what they intended.
+5. From there the PR is a normal new-entry submission — same Layer 1 → 2 → 3
+   pipeline — plus, because the suggester never typed the field values
+   themselves, the same **`/approve` self-ack** gate before auto-merge as
+   describe-only fixes (update flow, step 6).
+
 ## Contribution Flow — updates to existing entries (`update-rule.yml`)
 
 Existing rules break (sites change their URL structure) or need improvement.
 Requiring a hand-crafted PR would limit maintenance to developers, so updates
-get their own non-developer path:
+get their own non-developer path — one deliberately easy enough that reporters
+who only know *that* something is broken (not how to fix it) can still use it:
 
 1. Every rule detail page has a **"Report a problem / suggest an update"**
-   button linking to a second issue form, pre-filled with the entry's slug via
+   button linking to its own issue form, pre-filled with the entry's slug via
    the template query parameter
    (`…/issues/new?template=update-rule.yml&slug=<slug>`).
-2. The form collects: **Slug** (pre-filled, validated against the catalog),
-   **What's wrong / what should change** (textarea), the **proposed new field
-   values** (same rule fields as the submission form — any field left blank
-   means "keep current value"), at least one **URL demonstrating the problem
-   or verifying the fix**, and a **request-removal checkbox** for takedown
-   requests instead of edits.
-3. CI resolves the slug, applies the proposed field changes over the current
-   `rules/<slug>.json`, and validates the *result* through the exact same
-   pipeline as a new submission. It additionally posts a **before/after
-   diff** comment: old vs new field values and old vs new computed redirects
-   for every test URL.
-4. On success, CI opens a PR updating the file and bumping `meta.rev`. The
-   original submitter is @-mentioned on the PR (best effort, from
-   `meta.createdFromIssue`) so they can weigh in, but their approval is not a
-   hard gate — original authors go inactive, and rules must stay fixable.
-5. **Updates are never auto-merged.** A changed `to`/`from` on an
-   already-published entry is a hijack vector (users reinstall what a slug
-   currently points to), so every update PR routes to human review regardless
-   of risk score. Removal requests likewise.
+2. Only two fields are required: **Slug** (pre-filled, validated against the
+   catalog) and **What's wrong / what should change** (textarea). Everything
+   else is optional: the **proposed new field values** (same rule fields as
+   the submission form — any field left blank means "keep current value"), a
+   **URL demonstrating the problem or verifying the fix**, and a
+   **request-removal checkbox** for takedown requests instead of edits.
+3. The proposed fix comes from one of two places, depending on whether the
+   reporter filled any fix fields:
+   - **Fix fields supplied** → CI applies them over the current
+     `rules/<slug>.json` directly.
+   - **All fix fields left blank (describe-only report)** → the gh-aw
+     **rule-generation workflow** (`generate-rule.md`, shared with the
+     suggestion form above) reads the problem description and the current
+     entry, checks the demonstration URL and existing test URLs, works out
+     corrected field values, and emits them via `safe-outputs` into the same
+     CI machinery — the agent cannot push, merge, or edit files itself, and
+     the report text is untrusted data against a pinned prompt (a description
+     cannot reconfigure the agent). If it cannot produce a fix that passes
+     validation, it labels the issue `needs-human-fix` with a comment
+     explaining what it tried, instead of opening a PR.
+   Fixes from either source prefer **amending over replacing**: when a site
+   grows a new URL shape, keep the existing rules intact and add a rule (or
+   extend `exclude` / add test URLs) beside them, so URLs the old rules
+   still handle correctly keep working — a utility amendment cannot regress
+   installed behavior. Existing rules are rewritten or removed only for
+   structural breakage, where the old behavior is itself broken; that is a
+   breaking change and is gated accordingly (step 5).
+4. Either way, CI validates the *resulting* entry through the exact same
+   pipeline as a new submission. **Generated PRs always include test URLs**:
+   the entry's existing test URLs are kept (updated by the fix if the site's
+   structure changed) and the report's demonstration URL, when given, is
+   added as one. CI posts a **before/after diff** comment @-mentioning the
+   reporter: old vs new field values and, for every test URL, the resolved
+   redirect it now produces — so the reporter can look at the resolved URLs
+   and see they are as intended. On success it opens a PR updating the file
+   and bumping `meta.rev`. The original submitter is @-mentioned too (best
+   effort, from `meta.createdFromIssue`) so they can weigh in, but their
+   approval is not a hard gate — original authors go inactive, and rules
+   must stay fixable.
+5. CI classifies every update PR deterministically by replaying the entry's
+   pre-existing test URLs against the new rules:
+   - **Amendment** — purely additive (rules added, `exclude` extended, test
+     URLs added): every pre-existing test URL still resolves to the same
+     redirect. Amendments go through the **same auto agentic-review merge
+     pipeline as new submissions** (Layer 1 → Layer 2 → Layer 3, bot merge
+     on the default path); gh-aw-generated fixes get no shortcut for being
+     machine-made — the Layer 3 reviewer is a separate pinned-prompt agent
+     run that judges the diff on its own.
+   - **Breaking change** — an existing rule is rewritten or removed, or any
+     pre-existing test URL's resolved redirect changes. Breaking changes to
+     already-published rules **always require human review**
+     (`needs-human-review`, auto-merge disabled), and the entry's original
+     submitter is **tagged to review them as well** — the author of the PR
+     that introduced the entry or, for generated PRs, the author of the
+     originating issue (`meta.createdFromIssue`); their response is still
+     not a hard gate, per step 4. Repointing a published slug is a hijack
+     vector (users reinstall whatever a slug currently points to), and a
+     describe-only report is exactly how one would try to launder a repoint
+     through the automated path — a redirect target moving to a different
+     eTLD+1 additionally remains its own HIGH signal in Layer 2. Removal
+     requests always route to human review.
+6. **Reporter self-ack (`/approve`):** for describe-only fixes the reporter
+   never typed the field values themselves, so auto-merge additionally waits
+   for them to comment `/approve` on the PR — their acknowledgement, after
+   checking the resolved test URLs in the diff comment, that this approach
+   works for them. CI counts the command only from the reporting account,
+   and it is an *extra* condition on top of Layers 1–3, never a bypass (a
+   HIGH signal still disables auto-merge regardless of `/approve`). If the
+   reporter goes silent for 14 days, the PR is labeled `needs-human-review`
+   instead of merging unacknowledged.
 
 Developers can still PR `rules/*.json` directly; the same PR validation
 applies either way.
@@ -168,6 +253,8 @@ lines:
 | Homoglyph / confusable characters in redirect-target host (Cyrillic/Greek lookalikes, digit-letter swaps, decoded punycode) | HIGH | human review required |
 | Subdomain-of-target trick (`paypal.com.evil.example`) | HIGH | human review required |
 | `from` matches a high-sensitivity (auth/financial) domain AND target is a different eTLD+1 | HIGH | human review required |
+| Update repoints the redirect target to a different eTLD+1 (update PRs only) | HIGH | human review required |
+| Breaking update: existing rule rewritten/removed, or a pre-existing test URL's resolved redirect changes (update PRs only) | HIGH | human review required + original submitter tagged |
 | Redirect target is a known URL shortener | MEDIUM | warning annotation |
 | Excessive subdomain depth (> 4 labels) or hostname > 60 chars | MEDIUM | warning annotation |
 | `from` is extremely broad (`.*`, `^http`) | MEDIUM | warning annotation |
@@ -199,7 +286,9 @@ markdown-defined workflow (`.github/workflows/risk-review.md`, compiled to a
 verdict:
 
 - **approve** → the workflow approves and enables auto-merge; a bot merge
-  publishes the entry.
+  publishes the entry. (PRs whose field values were generated by gh-aw —
+  suggestions and describe-only fixes — additionally wait for the
+  submitter's `/approve` self-ack before the bot merges.)
 - **flag** (anything suspicious the deterministic signals missed: misleading
   name/description vs. actual behavior, tracking-parameter injection,
   affiliate-ID insertion, semantic lookalikes) → label `needs-human-review`
@@ -259,8 +348,8 @@ logged-out:
   swaps the Install button for store links plus a copy-to-clipboard JSON block
   compatible with the extension's existing **Import** feature. (Rev 1's
   separate `/install` fallback page is gone along with payload links.)
-- **"Share a rule" / "Report a problem"** buttons — link to the two issue
-  forms.
+- **"Share a rule" / "Suggest a rule" / "Report a problem"** buttons — link
+  to the three issue forms.
 
 ## Repository Layout
 
@@ -268,10 +357,12 @@ logged-out:
 redirector-marketplace/
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
-│   │   ├── submit-rule.yml        # new-entry form
+│   │   ├── submit-rule.yml        # new-entry form (fields supplied by submitter)
+│   │   ├── suggest-rule.yml       # example-based suggestion form (gh-aw drafts the fields)
 │   │   └── update-rule.yml        # update/removal-request form (slug pre-filled)
 │   ├── workflows/
 │   │   ├── validate-submission.yml# issue → parse → validate → PR (create or update)
+│   │   ├── generate-rule.md       # gh-aw rule generation: suggestions + describe-only fixes (+ compiled .lock.yml)
 │   │   ├── validate-pr.yml        # Layer 1 hard gates + Layer 2 risk signals
 │   │   ├── risk-review.md         # Layer 3 gh-aw agentic review (+ compiled .lock.yml)
 │   │   └── deploy-pages.yml       # build & deploy static site on merge
@@ -291,9 +382,12 @@ since the default path there is bot-merged after the pipeline passes.
 
 The only interfaces the two repos share — keep them stable and versioned:
 
-1. **Official origin** — hardcoded in the extension's `content_scripts` match
-   and canonical-fetch base URL. Changing it requires an extension release.
-2. **Canonical artifact URL & schema** — `GET <origin>/rules/<slug>.json`
+1. **Official origin** — first entry of the extension's compile-time
+   `TRUSTED_ORIGINS` array, from which its `content_scripts` matches and
+   canonical-fetch base URLs derive. Changing it requires an extension
+   release; forks testing marketplace changes append their own origin in
+   their own builds.
+2. **Canonical artifact URL & schema** — `GET <base>/rules/<slug>.json`
    returning the `v`/`meta`/`rules` document above; bump `v` on breaking
    changes (the extension rejects unknown versions).
 3. **DOM integration contract** — the readiness marker
