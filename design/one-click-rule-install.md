@@ -113,7 +113,8 @@ It is a base64url-encoded UTF-8 JSON document:
   "meta": {
     "name": "Old Reddit",
     "description": "Always use old.reddit.com",
-    "source": "https://github.com/<owner>/redirector-marketplace/blob/main/rules/old-reddit.json"
+    "source": "https://github.com/<owner>/redirector-marketplace/blob/main/rules/old-reddit.json",
+    "sourceLabel": "Redirector Marketplace"
   }
 }
 ```
@@ -124,9 +125,17 @@ It is a base64url-encoded UTF-8 JSON document:
   `src/lib/url.ts` (`from`, `to`, `exclude?`, `mode?`, `testUrl?`). `enabled`
   is intentionally **not accepted** from the payload; the confirmation screen
   decides it (default: enabled, user can toggle).
-- `meta` — display-only. `source` lets the confirmation screen link back to
-  the marketplace entry for provenance; it is stored nowhere unless we later
-  decide to keep provenance.
+- `meta` — provenance data stored alongside the rule in extension storage.
+  - `source` — full URL linking back to the marketplace entry; displayed as a
+    link on the confirmation screen and in the rules list.
+  - `sourceLabel` — human-readable name of the marketplace or source that
+    generated this link (e.g. `"Redirector Marketplace"`). The user may rename
+    it on the confirmation screen or later in the extension settings; the
+    renamed label is stored with the rule and shown as a small badge next to the
+    rule in the rules list so the user always knows where each installed rule
+    came from. If a trusted origin entry already has a user-assigned title (see
+    Origin allow-list below) it pre-fills this field; otherwise the payload's
+    `sourceLabel` is used as the default.
 - Size limit: reject payloads over ~8 KB after decoding.
 - Multiple rules: `rule` may instead be `rules: MatchRule[]` (bounded, e.g.
   max 20) so curated bundles work; the confirmation screen lists each one with
@@ -137,8 +146,12 @@ It is a base64url-encoded UTF-8 JSON document:
 A new route/section in the existing options app (Svelte), reusing the
 `RuleDialog` field layout:
 
-1. **Header** — "Install rule from community marketplace" with the `meta.name`
-   and a link to `meta.source`.
+1. **Header** — "Install rule from community marketplace" with the `meta.name`,
+   a link to `meta.source`, and an editable **Source label** field pre-filled
+   from the trusted-origin title (if the user has set one) or `meta.sourceLabel`
+   from the payload. The user can rename the source here before installing; the
+   label is stored with the rule and is not overwritten on subsequent installs
+   from the same origin.
 2. **Rule details, read-only but expandable** — Match URL, Redirect To,
    Exclude, Mode, exactly as `RuleDialog` renders them.
 3. **Live test** — the payload's `testUrl` is run through the existing
@@ -161,7 +174,10 @@ A new route/section in the existing options app (Svelte), reusing the
    the rules list). A toggle chooses enabled/disabled on install
    (default enabled).
 6. After install, land on the normal rules list with the new rule highlighted
-   and a success toast.
+   and a success toast. The rule row shows a small **source badge** (the stored
+   `sourceLabel`) next to the rule name so the user can always see where each
+   marketplace-installed rule came from. Clicking the badge opens `meta.source`
+   (the original marketplace entry URL).
 
 ## Security Considerations
 
@@ -175,10 +191,14 @@ A new route/section in the existing options app (Svelte), reusing the
   sources via an **extension settings page** (a user-editable allow-list stored
   in `sync` storage). Each user-added origin is shown a one-time confirmation
   dialog ("Allow rules from `https://example.github.io/my-marketplace/`?") before
-  it is saved, so no origin is silently trusted. The built-in list can only be
-  expanded through a normal extension release — that friction stays for
-  *default* trust; the opt-in path keeps the user in control without requiring
-  a release.
+  it is saved, so no origin is silently trusted. The settings page also lets
+  the user assign a **human-readable title** to each trusted origin (e.g.
+  `"My Team's Marketplace"`); this title is used as the pre-filled source label
+  on the install confirmation screen and stored as the `sourceLabel` on every
+  rule installed from that origin, so the provenance badge in the rules list
+  reflects the user's own naming. The built-in list can only be expanded through
+  a normal extension release — that friction stays for *default* trust; the
+  opt-in path keeps the user in control without requiring a release.
 - **Validation before render.** Payload is JSON-parsed inside `try/catch`,
   schema-checked (only known keys of the expected types accepted, everything
   else dropped), and all displayed strings are rendered as text (Svelte's
@@ -303,10 +323,16 @@ Small, contained changes:
    same pattern as existing redirect handling).
 3. `src/entrypoints/options/` — an `#/install` route/state in `App.svelte`
    showing the confirmation screen; reuse `RuleDialog` fields,
-   `RuleCheckResult`, `matchRule`, and the `rules` store's add path.
-4. Tests — decode/validate unit tests; a store-level test that confirming
-   appends exactly one normalized rule; a background test for the origin/path
-   gate.
+   `RuleCheckResult`, `matchRule`, and the `rules` store's add path. The
+   source-label field and the rules-list source badge are also rendered here.
+4. `src/lib/sources.ts` — manages the user-editable trusted-origin allow-list
+   (stored in `sync` storage); each entry has `origin`, user-assigned `title`,
+   and `addedAt`. The settings UI reads/writes this store; the install page
+   uses it to pre-fill the source label.
+5. Tests — decode/validate unit tests; a store-level test that confirming
+   appends exactly one normalized rule with the correct `sourceLabel`; a
+   background test for the origin/path gate; a sources-store test covering
+   add/rename/remove.
 
 No manifest changes required: `webNavigation` + `<all_urls>` are already
 requested, and options pages already exist.
