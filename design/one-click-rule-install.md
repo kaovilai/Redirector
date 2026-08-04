@@ -115,13 +115,16 @@ The content script relays `{ type: 'install', slug }` to the background via
 
 1. Validates the slug shape (`^[a-z0-9][a-z0-9-]{0,63}$`) — this is a URL path
    segment, so reject anything else before building the URL (no traversal).
-2. Resolves the sender against `TRUSTED_ORIGINS`: `sender.origin` must equal
-   the origin of an entry (defense in depth — only trusted-origin content
-   scripts exist anyway), and that entry becomes the fetch base. Fetches
-   `<base>/rules/<slug>.json` with `cache: 'no-cache'` (so takedowns and
-   updates are seen promptly). The fetch base comes from the compile-time
-   entry matched by the validated sender origin, never from message data, so
-   each marketplace instance can only ever install what it itself publishes.
+2. Resolves the sender against `TRUSTED_ORIGINS`: `sender.url` must start
+   with the full base URL of an entry (origin + required path prefix), not
+   just its origin — two GitHub Pages project sites share the same origin and
+   differ only by path, so matching origin alone is insufficient (defense in
+   depth — only trusted-URL content scripts exist anyway). That matched entry
+   becomes the fetch base. Fetches `<base>/rules/<slug>.json` with
+   `cache: 'no-cache'` (so takedowns and updates are seen promptly). The
+   fetch base comes from the compile-time entry matched by the validated
+   sender URL, never from message data, so each marketplace instance can only
+   ever install what it itself publishes.
    The existing `<all_urls>` host permission already covers this fetch.
 3. Validates the document (see Validation below). A 404 means the entry was
    taken down or never existed: takedown is immediately effective for installs.
