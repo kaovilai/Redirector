@@ -66,7 +66,7 @@ redirector-marketplace/
 │   │   └── submit-rule.yml        # issue form (fields above)
 │   └── workflows/
 │       ├── validate-submission.yml# issue → validate → PR
-│       ├── validate-pr.yml        # re-validate rule JSON on PRs
+│       ├── validate-pr.yml        # re-validate rule JSON + phishing risk check on PRs
 │       └── deploy-pages.yml       # build & deploy static site on merge
 ├── rules/
 │   ├── old-reddit.json            # one file per rule (source of truth)
@@ -74,6 +74,8 @@ redirector-marketplace/
 │   └── …
 ├── schema/
 │   └── rule.schema.json           # JSON Schema for rule files
+├── scripts/
+│   └── validate-rules.js          # phishing risk check + schema validation (Node.js)
 ├── site/                          # static site generator input
 │   ├── index build script (any SSG or a plain build script)
 │   └── templates/ (listing page, rule detail page, install fallback page)
@@ -153,6 +155,79 @@ limits, works logged-out:
   copies are the user's own, as with manual entry — the extension does not
   phone home.)
 - `CODEOWNERS` on `rules/` so merges always require a maintainer.
+
+## GitHub Actions Risk Check (`validate-pr.yml`)
+
+Every PR that adds or modifies a file under `rules/` must pass a
+**phishing-risk workflow** that runs the same signal analysis as the extension
+(`src/lib/phishing.ts` logic, vendored into the marketplace repo as a Node.js
+script). The workflow **fails** (non-zero exit code, blocking merge) when any
+HIGH-severity signal is detected; MEDIUM signals post a warning annotation but
+do not block.
+
+### Signals that cause a workflow failure
+
+| Signal | Severity | Block merge? |
+|--------|----------|--------------|
+| Homoglyph / confusable characters in redirect-target host | HIGH | ✅ |
+| Subdomain-of-target trick (`paypal.com.evil.example`) | HIGH | ✅ |
+| `from` pattern matches a high-sensitivity domain AND target is on a different eTLD+1 | HIGH | ✅ |
+| Redirect target is a known URL shortener | MEDIUM | ⚠️ annotation |
+| Excessive subdomain depth (> 4 labels) or hostname > 60 chars | MEDIUM | ⚠️ annotation |
+| Target is on a free-hosting service (e.g. `*.vercel.app`) | LOW | comment only |
+| `from` pattern is extremely broad (`.*`, `^http`) | MEDIUM | ⚠️ annotation |
+
+Annotations appear as inline PR review comments on the offending `rules/*.json`
+file via the [reviewdog](https://github.com/reviewdog/reviewdog) action (or
+GitHub's native `error`/`warning` workflow commands), so maintainers see the
+exact line and reason.
+
+### Workflow sketch
+
+```yaml
+# .github/workflows/validate-pr.yml
+name: Validate rules on PR
+
+on:
+  pull_request:
+    paths:
+      - "rules/**"
+
+jobs:
+  risk-check:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write   # to post annotations
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - name: Validate changed rule files
+        run: |
+          # Get list of added/modified rules files in this PR
+          git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD \
+            | grep '^rules/' \
+            | xargs node scripts/validate-rules.js
+        # validate-rules.js exits 1 if any HIGH signal is found,
+        # prints ::error:: / ::warning:: annotations for GitHub to render.
+```
+
+### `scripts/validate-rules.js` responsibilities
+
+1. For each rule file passed as an argument:
+   - Parse and schema-validate the JSON (same JSON Schema as `schema/rule.schema.json`).
+   - Run all six phishing-risk signals (same logic as `src/lib/phishing.ts`).
+   - Compile the `from` regex and verify every URL in `meta.additionalTestUrls` matches
+     and produces a non-self redirect.
+2. Emit `::error file=rules/<slug>.json::` for HIGH signals and
+   `::warning file=rules/<slug>.json::` for MEDIUM signals.
+3. Exit with code `1` if any HIGH signal was found across all checked files,
+   causing the workflow job to fail and blocking merge until a maintainer
+   explicitly overrides with an approval label (e.g. `risk-reviewed`) and a
+   second maintainer re-runs the check job in a forced-pass mode.
 
 ## Coupling Contract with the Extension
 

@@ -151,7 +151,11 @@ A new route/section in the existing options app (Svelte), reusing the
    - duplicate of an existing rule (`from`+`to` match) → "already installed";
    - very broad match pattern (e.g. matches `<all_urls>`-ish patterns like
      `.*` or `^http`) → yellow caution banner;
-   - redirect target host differs wildly from match host → informational note.
+   - redirect target host differs wildly from match host → informational note;
+   - **phishing risk detected** (see Anti-Phishing Analysis below) → prominent
+     red warning banner with a per-signal explanation. The user must explicitly
+     check a box ("I understand the risks") before the **Add Rule** button
+     becomes active.
 5. **Actions** — **Add Rule** (appends via existing storage write, respecting
    the current sync/local storage mode) and **Cancel** (closes/navigates to
    the rules list). A toggle chooses enabled/disabled on install
@@ -182,13 +186,113 @@ A new route/section in the existing options app (Svelte), reusing the
 - **`enabled` not honored from payload** so a malicious link can't sneak in a
   pre-armed rule without the user seeing the toggle.
 
+## Anti-Phishing Analysis
+
+Redirect rules that steer users toward lookalike or impostor domains are among
+the most dangerous payloads this install flow can carry. The confirmation screen
+runs a local phishing-risk analysis on the decoded rule *before* displaying
+it. Signals are combined into a risk score; any HIGH-severity signal (or two or
+more MEDIUM signals) triggers the red warning banner described in the
+Confirmation UX section above.
+
+### Signals checked
+
+**1. Homoglyph / confusable character substitution in the redirect target host**
+
+Attackers replace letters with visually identical Unicode characters or
+ASCII lookalikes. The extension compares the `to` host against the `from` host
+and a built-in list of high-value domains using confusable-character
+normalization (Unicode Confusables dataset, subset covering the most common
+spoofs):
+
+| Substitution class | Examples |
+|--------------------|----------|
+| Cyrillic / Latin mixed | `а` (U+0430) → `a`, `е` (U+0435) → `e`, `о` (U+043E) → `o`, `р` (U+0440) → `r`, `с` (U+0441) → `c`, `х` (U+0445) → `x` |
+| Greek | `α` → `a`, `β` → `b`, `ο` → `o`, `ρ` → `r`, `υ` → `u` |
+| ASCII digit/letter swaps | `0` → `o`, `1` → `l` / `i`, `3` → `e`, `5` → `s`, `6` → `g`, `8` → `b` |
+| Homoglyph punctuation | `‐` (U+2010) → `-`, `．` (U+FF0E) → `.` |
+| IDN encoding | punycode (`xn--`) decoded before comparison |
+
+If after normalization the redirect-target host differs from the matched host
+only by these substitutions (or matches a sensitive domain via this path),
+severity = **HIGH** and the UI shows:
+> "This rule redirects to a domain that looks like **\<original host\>** but
+> differs by character substitutions commonly used in phishing (e.g.
+> `rеddit.com` uses a Cyrillic 'е'). Check the address bar carefully."
+
+**2. Redirect-target host is a known URL shortener or redirector service**
+
+A built-in blocklist of popular shortener domains (`bit.ly`, `t.co`, `tinyurl.com`,
+`ow.ly`, `is.gd`, `buff.ly`, `rebrandly.com`, etc.). Severity = **MEDIUM**
+(shorteners obscure the final destination).
+
+**3. Excessive subdomain depth or very long hostname**
+
+Hosts with more than 4 labels or a total hostname length over 60 characters
+are a common phishing indicator. Severity = **MEDIUM**.
+
+**4. Redirect target is on a free-subdomain hosting service**
+
+Built-in list of services frequently abused for phishing: `*.github.io` (except
+the allow-listed marketplace origin), `*.vercel.app`, `*.netlify.app`,
+`*.pages.dev`, `*.glitch.me`, `*.repl.co`, `*.web.app`, etc. Severity = **LOW**
+(legitimate rules also use these, so it is informational only unless combined
+with other signals).
+
+**5. The `from` pattern matches authentication or financial domains**
+
+If the regex in `from` matches URLs on a list of high-sensitivity domains
+(banks, OAuth providers, e-mail providers, government sites), the rule is
+subject to heightened scrutiny regardless of where `to` points. Severity =
+**MEDIUM** (could be legitimate — e.g. "always use HTTPS" rules — but warrants
+extra review).
+
+**6. Subdomain-of-target trick**
+
+The redirect target host ends with the matched host but prepends a deceptive
+label (e.g. matched `paypal.com`, target `paypal.com.evil.example`). Severity
+= **HIGH**.
+
+### Warning UI
+
+When one or more signals fire, the confirmation screen shows:
+
+```
+⛔ Phishing risk detected — review carefully before installing
+
+This rule may redirect you to a deceptive site. Specific concerns:
+  • The redirect target "rеddit.com" resembles "reddit.com" but uses
+    a Cyrillic character in place of the letter 'e'.
+  • The target host has more than 4 subdomain levels.
+
+Only install rules from sources you trust. [Learn more ↗]
+
+[ ] I have reviewed the above warnings and still want to install this rule.
+                                               [Cancel]  [Add Rule — disabled until checked]
+```
+
+The **Add Rule** button remains disabled until the acknowledgement checkbox is
+checked; it never disappears, so users are never blocked from installing a rule
+they genuinely want.
+
+### Implementation note
+
+All analysis runs **synchronously, locally** in `src/lib/install.ts` — no
+network requests, no external API for phishing classification. The confusable
+map and blocklists are bundled as static JSON at build time (small: the pruned
+confusables table relevant to domain names is ~15 KB). This keeps install time
+instant and the extension offline-capable.
+
 ## Implementation Sketch (extension repo)
 
 Small, contained changes:
 
 1. `src/lib/install.ts` — payload decode + schema validation + duplicate/
-   broad-pattern checks (pure functions, unit-testable with vitest like
-   `check.ts`).
+   broad-pattern checks + phishing-risk analysis (pure functions, unit-testable
+   with vitest like `check.ts`; includes bundled confusables map and blocklists).
+2. `src/lib/phishing.ts` — standalone module: confusable normalization,
+   shortener blocklist, high-sensitivity domain list, risk-score aggregation,
+   and human-readable signal descriptions returned to the UI.
 2. `src/entrypoints/background.ts` — add the marketplace-origin navigation
    listener that rewrites the tab to the internal install page (a few lines,
    same pattern as existing redirect handling).
