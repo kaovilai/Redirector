@@ -145,7 +145,13 @@ limits, works logged-out:
   *without* the extension land here; it reads the fragment client-side,
   pretty-prints the rule, links to the extension's store listings, and offers
   a copy-to-clipboard JSON block compatible with the extension's existing
-  **Import** feature. One URL, two graceful outcomes.
+  **Import** feature. One URL, two graceful outcomes. The page displays a
+  prominent disclaimer:
+  > **Disclaimer:** Rules in this marketplace are community-supplied. Installing
+  > a rule will cause the Redirector extension to redirect your browsing traffic
+  > according to the rule's match and redirect expressions. You accept full
+  > responsibility for the effects of any rule you choose to install. Only
+  > install rules from sources you trust.
 - **"Share a rule" button** — links to the issue form.
 
 ## Moderation & Safety

@@ -146,6 +146,13 @@ It is a base64url-encoded UTF-8 JSON document:
 A new route/section in the existing options app (Svelte), reusing the
 `RuleDialog` field layout:
 
+> **Disclaimer (always visible on every install, regardless of risk level):**
+> Community rules are user-supplied content. Installing a rule will cause the
+> extension to redirect your browsing traffic according to its match and
+> redirect expressions. **By clicking Add Rule you accept full responsibility
+> for the effects of this rule on your browsing.** Only install rules from
+> sources you trust.
+
 1. **Header** — "Install rule from community marketplace" with the `meta.name`,
    a link to `meta.source`, and an editable **Source label** field pre-filled
    from the trusted-origin title (if the user has set one) or `meta.sourceLabel`
