@@ -169,11 +169,16 @@ A new route/section in the existing options app (Svelte), reusing the
   from URL" indirection, so a marketplace page can't swap the payload after
   review, and the extension needs no new host access at install time.
 - **Origin allow-list.** The background interception only triggers on the
-  configured marketplace origin(s) + exact install path. The list ships in the
-  extension (constant), so adding origins requires an extension release —
-  deliberate friction. Anyone can still craft the deep link manually, but it
-  only works from allow-listed pages; pasting a payload elsewhere degrades to
-  the fallback page.
+  configured marketplace origin(s) + exact install path. A built-in list of
+  well-known marketplace origins ships with the extension; adding a new origin
+  requires no extension release — users can opt in to additional trusted
+  sources via an **extension settings page** (a user-editable allow-list stored
+  in `sync` storage). Each user-added origin is shown a one-time confirmation
+  dialog ("Allow rules from `https://example.github.io/my-marketplace/`?") before
+  it is saved, so no origin is silently trusted. The built-in list can only be
+  expanded through a normal extension release — that friction stays for
+  *default* trust; the opt-in path keeps the user in control without requiring
+  a release.
 - **Validation before render.** Payload is JSON-parsed inside `try/catch`,
   schema-checked (only known keys of the expected types accepted, everything
   else dropped), and all displayed strings are rendered as text (Svelte's

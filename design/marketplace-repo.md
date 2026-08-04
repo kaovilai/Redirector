@@ -28,6 +28,9 @@ GitHub's built-in features — no backend, no database, no auth code:
 2. User fills a structured **issue form** with the same fields the extension
    has today:
    - **Rule name** (required, short text)
+   - **Your name / display name** (required, short text — used to credit the
+     submitter in the marketplace listing and stored in `meta.author`; defaults
+     to the submitter's GitHub username if left blank)
    - **Description** (optional, textarea)
    - **Match URL** — the regex/URLPattern to match (`from`) (required)
    - **Redirect To** — the replacement expression (`to`) (required)
@@ -94,7 +97,7 @@ exactly what gets base64url-encoded into the install link:
     "name": "Old Reddit",
     "slug": "old-reddit",
     "description": "Always use old.reddit.com instead of the redesign",
-    "author": "github-username",
+    "author": "Alice (github: alice-gh)",
     "tags": ["reddit", "ui"],
     "createdFromIssue": 123
   },
@@ -113,6 +116,9 @@ matching the `MatchRule` interface. `rule.testUrl` (singular) is the one test
 URL shown in the extension confirmation screen. If the submission form collects
 additional test URLs they are used for CI validation only and stored in
 `meta.additionalTestUrls`; they are not part of the install payload.
+`meta.author` stores the display name the submitter provided in the issue form,
+falling back to their GitHub username if they left it blank; it is shown on the
+marketplace rule detail page as a credit.
 
 ## Static Site (GitHub Pages)
 
