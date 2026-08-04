@@ -62,11 +62,13 @@ that the extension intercepts with its existing redirect machinery.
    `webRequest`, `webNavigation`, `<all_urls>`) that watches for navigations to
    the well-known install path on the allow-listed marketplace origin(s).
 
-3. When such a navigation is detected, the background script redirects the tab
-   to the extension's own install page, passing the fragment through:
+3. When such a navigation is detected, the background script:
+   - extracts the `rule` value from the intercepted URL's fragment
+     (`new URL(details.url).hash` → parse `rule=<payload>`),
+   - constructs a new extension URL with that value:
 
    ```
-   browser.runtime.getURL('/options.html') + '#/install?rule=' + payload
+   browser.runtime.getURL('/options.html') + '#/install?rule=' + extractedPayload
    ```
 
    This reuses the exact interception pattern the extension already uses for
@@ -88,7 +90,9 @@ that the extension intercepts with its existing redirect machinery.
 
 - Fragments are never sent to the server, so the GitHub Pages host (and its
   logs) never see the payload.
-- Fragments survive the redirect into the extension page unchanged.
+- The background script explicitly extracts the `rule` parameter from the
+  intercepted fragment and reattaches it to the extension install URL; the
+  fragment value does not automatically carry over across the navigation.
 - No length-sensitive server behavior; payloads stay client-side end to end.
 
 ## Payload Format

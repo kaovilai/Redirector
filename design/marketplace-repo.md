@@ -102,13 +102,15 @@ exactly what gets base64url-encoded into the install link:
     "exclude": "",
     "mode": "regex",
     "testUrl": "https://www.reddit.com/r/cats"
-  },
-  "testUrls": [
-    "https://www.reddit.com/r/cats",
-    "https://www.reddit.com/r/programming/comments/abc"
-  ]
+  }
 }
 ```
+
+The `rule` object is exactly what is base64url-encoded into the install link,
+matching the `MatchRule` interface. `rule.testUrl` (singular) is the one test
+URL shown in the extension confirmation screen. If the submission form collects
+additional test URLs they are used for CI validation only and stored in
+`meta.additionalTestUrls`; they are not part of the install payload.
 
 ## Static Site (GitHub Pages)
 
