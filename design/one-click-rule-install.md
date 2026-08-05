@@ -1,7 +1,7 @@
 # One-Click Rule Install (Extension Side)
 
-Status: Proposal — **Rev 2**, reworked per maintainer review
-([PR #3 review](https://github.com/kaovilai/redirector/pull/3#issuecomment-5181559627)).
+Status: Proposal — **Rev 3**, revised per maintainer scope decisions
+([PR #3 review](https://github.com/kaovilai/redirector/pull/3#issuecomment-5186853946)).
 The Rev 1 deep-link design (fragment payloads + origin allow-list + in-extension
 install page) is replaced: the origin allow-list was not a real trust boundary,
 because the payload lived in a fragment that any page could construct.
@@ -134,8 +134,8 @@ The content script relays `{ type: 'install', slug }` to the background via
    the button ("Installed" — shown as "Reinstall" for already-installed slugs,
    since reinstalling is the manual update path — or an error state). The
    extension does not track entry revisions (see storage quota below); the
-   detail page displays its own `meta.rev` / updated date, and the user decides
-   whether to reinstall.
+   detail page displays the last-updated date, and the user decides whether
+   to reinstall.
 
 ```ts
 type MarketplaceRequest =
@@ -187,7 +187,8 @@ schema in [marketplace-repo.md](./marketplace-repo.md)):
 - `v` — document schema version; unknown versions → `invalid` outcome (page
   shows "update the extension").
 - `rules` — 1..N objects mapping onto the existing `MatchRule` in
-  `src/lib/url.ts` (`from`, `to`, `exclude?`, `mode?`, `testUrl?`).
+  `src/lib/url.ts` (`from`, `to`, `exclude?`, `mode?`, `testUrl`).
+  **`testUrl` is required** on every rule (schema enforces it).
 - **`enabled` is never honored from the outside.** The extension strips it if
   present; installed rules go through the existing `normalizeRules()`
   defaulting.
